@@ -17,20 +17,17 @@ EXCAPE_URL = 'https://zenodo.org/record/2543724/files/pubchem.chembl.dataset4pub
 EXCAPE_VERSION = 'v2'
 
 
-@click.command()
-@more_click.verbose_option
-def main():
-    """Build NSoC-KG."""
-    #
-    # ExCAPE-DB
-    #
-    # ExCAPE-DB is a database of chemical modulations of proteins built as a curated subset of
-    # ChEBML and PubChem
-    #
-    excape_path = pystow.ensure('bio2bel', 'excapedb', EXCAPE_VERSION, url=EXCAPE_URL)
-    excape_cut_path = pystow.get('nsockg', 'excapedb', EXCAPE_VERSION, 'excape.tsv')
+def _excape(file) -> None:
+    """Pre-process ExCAPE-DB.
 
-    with lzma.open(excape_path, mode='rt') as infile, open(excape_cut_path, 'w') as outfile:
+    ExCAPE-DB is a database of chemical modulations of proteins built as a curated subset of
+    ChEBML and PubChem
+
+    Future directions:
+    - Add a variable pXC50 cutoff besides 6.0
+    """
+    excape_path = pystow.ensure('bio2bel', 'excapedb', EXCAPE_VERSION, url=EXCAPE_URL)
+    with lzma.open(excape_path, mode='rt') as infile:
         _header = next(infile)
         for i, line in enumerate(tqdm(infile, unit_scale=True, desc='ExCAPE-DB')):
             line = line.strip().split('\t')
@@ -45,23 +42,26 @@ def main():
                 tqdm.write(f'failure on line {i}')
                 continue
             else:
-                print(f'inchikey:{line[0]}', 'modulates', f'ncbigene:{line[2]}', sep='\t', file=outfile)
+                print(f'inchikey:{line[0]}', 'modulates', f'ncbigene:{line[2]}', sep='\t', file=file)
 
-    #
-    # BioGRID
-    #
-    # BioGRID is a manually curated database of protein-protein and protein-complex interactions
-    #
-    biogrid_version = bioversions.get_version('biogrid')
-    biogrid_url = f'https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/BIOGRID-{biogrid_version}/BIOGRID-ALL-{biogrid_version}.tab3.zip'
-    biogrid_path = pystow.ensure('bio2bel', 'biogrid', biogrid_version, url=biogrid_url)
-    biogrid_cut_path = pystow.get('nsockg', 'biogrid', biogrid_version, 'biogrid_cut.tsv')
+
+def _biogrid(file, version):
+    """BioGRID
+
+    BioGRID is a manually curated database of protein-protein and protein-complex interactions
+
+    :param file:
+    :return:
+    """
+    biogrid_url = f'https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/' \
+                  f'BIOGRID-{version}/BIOGRID-ALL-{version}.tab3.zip'
+    biogrid_path = pystow.ensure('bio2bel', 'biogrid', version, url=biogrid_url)
 
     with zipfile.ZipFile(biogrid_path) as zip_file:
-        with zip_file.open('BIOGRID-ALL-4.3.195.tab3.txt') as infile, open(biogrid_cut_path, 'w') as outfile:
+        with zip_file.open(f'BIOGRID-ALL-{version}.tab3.txt') as infile:
             lines = (
                 line.decode('utf-8').strip().split('\t')
-                for line in tqdm(infile, unit_scale=True, desc=f'BioGRID v{biogrid_version}')
+                for line in tqdm(infile, unit_scale=True, desc=f'BioGRID v{version}')
             )
 
             header = next(lines)
@@ -82,8 +82,22 @@ def main():
                     'interacts',
                     f'ncbigene:{line[target_key]}',
                     sep='\t',
-                    file=outfile,
+                    file=file,
                 )
+
+
+@click.command()
+@more_click.verbose_option
+def main():
+    """Build NSoC-KG."""
+    excape_cut_path = pystow.get('nsockg', 'excapedb', EXCAPE_VERSION, 'excape.tsv')
+    with open(excape_cut_path, 'w') as file:
+        _excape(file)
+
+    biogrid_version = bioversions.get_version('biogrid')
+    biogrid_cut_path = pystow.get('nsockg', 'biogrid', biogrid_version, 'biogrid_cut.tsv')
+    with open(biogrid_cut_path, 'w') as file:
+        _biogrid(file, biogrid_version)
 
 
 if __name__ == '__main__':
