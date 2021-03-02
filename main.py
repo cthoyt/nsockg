@@ -4,6 +4,7 @@
 
 import lzma
 import zipfile
+from typing import TextIO
 
 import click
 import more_click
@@ -17,7 +18,7 @@ EXCAPE_URL = 'https://zenodo.org/record/2543724/files/pubchem.chembl.dataset4pub
 EXCAPE_VERSION = 'v2'
 
 
-def _excape(file) -> None:
+def _excape(file: TextIO, human_only: bool = False) -> None:
     """Pre-process ExCAPE-DB.
 
     ExCAPE-DB is a database of chemical modulations of proteins built as a curated subset of
@@ -31,7 +32,7 @@ def _excape(file) -> None:
         _header = next(infile)
         for i, line in enumerate(tqdm(infile, unit_scale=True, desc='ExCAPE-DB')):
             line = line.strip().split('\t')
-            if line[7] != '9606':  # Taxonomy ID must be human
+            if human_only and line[7] != '9606':  # Taxonomy ID must be human
                 continue
             if line[3] != 'A':  # Activity_Flag is active (A) instead of not active (N)
                 continue
@@ -45,19 +46,16 @@ def _excape(file) -> None:
                 print(f'inchikey:{line[0]}', 'modulates', f'ncbigene:{line[2]}', sep='\t', file=file)
 
 
-def _biogrid(file, version):
-    """BioGRID
+def _biogrid(file: TextIO, version: str, human_only: bool = False) -> None:
+    """Pre-process the given version of BioGRID.
 
-    BioGRID is a manually curated database of protein-protein and protein-complex interactions
-
-    :param file:
-    :return:
+    BioGRID is a manually curated database of protein-protein and protein-complex interactions.
     """
-    biogrid_url = f'https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/' \
-                  f'BIOGRID-{version}/BIOGRID-ALL-{version}.tab3.zip'
-    biogrid_path = pystow.ensure('bio2bel', 'biogrid', version, url=biogrid_url)
+    url = f'https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/' \
+          f'BIOGRID-{version}/BIOGRID-ALL-{version}.tab3.zip'
+    path = pystow.ensure('bio2bel', 'biogrid', version, url=url)
 
-    with zipfile.ZipFile(biogrid_path) as zip_file:
+    with zipfile.ZipFile(path) as zip_file:
         with zip_file.open(f'BIOGRID-ALL-{version}.tab3.txt') as infile:
             lines = (
                 line.decode('utf-8').strip().split('\t')
@@ -73,9 +71,7 @@ def _biogrid(file, version):
             organism_b_key = header_dict['Organism Name Interactor B']
 
             for line in lines:
-                if line[organism_a_key] != 'Homo sapiens':
-                    continue
-                if line[organism_b_key] != 'Homo sapiens':
+                if human_only and (line[organism_a_key] != 'Homo sapiens' or line[organism_b_key] != 'Homo sapiens'):
                     continue
                 print(
                     f'ncbigene:{line[source_key]}',
@@ -84,6 +80,33 @@ def _biogrid(file, version):
                     sep='\t',
                     file=file,
                 )
+
+
+def _homologene(file: TextIO, version: str) -> None:
+    """Pre-process the orthology data from HomoloGene.
+
+    :param file:
+    :param version:
+    :return:
+
+    The README at https://ftp.ncbi.nih.gov/pub/HomoloGene/README states
+    that HomoloGene has the following data:
+
+    1) HID (HomoloGene group id)
+    2) Taxonomy ID
+    3) Gene ID
+    4) Gene Symbol
+    5) Protein gi
+    6) Protein accession
+
+    """
+    url = f'https://ftp.ncbi.nih.gov/pub/HomoloGene/build{version}/homologene.data'
+    df = pystow.ensure_csv('bio2bel', 'homologene', version, url=url, read_csv_kwargs={
+        'usecols': [0, 2],
+        'sep': '\t',
+    })
+    for homologene_id, ncbigene_id in tqdm(df.values, unit_scale=True, desc=f'HomoloGene v{version}'):
+        print(ncbigene_id, 'homologyGroup', homologene_id, sep='\t', file=file)
 
 
 @click.command()
@@ -98,6 +121,11 @@ def main():
     biogrid_cut_path = pystow.get('nsockg', 'biogrid', biogrid_version, 'biogrid_cut.tsv')
     with open(biogrid_cut_path, 'w') as file:
         _biogrid(file, biogrid_version)
+
+    homolgene_version = bioversions.get_version('homologene')
+    homolgene_cut_path = pystow.get('nsockg', 'homologene', homolgene_version, 'homologene.tsv')
+    with open(homolgene_cut_path, 'w') as file:
+        _homologene(file, homolgene_version)
 
 
 if __name__ == '__main__':
