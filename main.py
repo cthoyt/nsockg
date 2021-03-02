@@ -1,21 +1,82 @@
 # -*- coding: utf-8 -*-
 
-"""Build the "Not Scared of Chemistry" Knowledge Graph."""
+"""Build the "Not Scared of Chemistry" Knowledge Graph.
 
+.. seealso:: https://doi.org/10.5281/zenodo.4574554
+"""
+
+import datetime
+import getpass
+import json
 import lzma
 import zipfile
 from typing import TextIO
 
+import bioversions
 import click
 import more_click
-from tqdm import tqdm
-
-import bioversions
 import pystow
+from tqdm import tqdm
+from zenodo_client import Creator, Metadata, ensure_zenodo
 
 # unlike BioGRID, ExCAPE-DB can be considered a static resource
 EXCAPE_URL = 'https://zenodo.org/record/2543724/files/pubchem.chembl.dataset4publication_inchi_smiles_v2.tsv.xz'
 EXCAPE_VERSION = 'v2'
+
+NSOCKG_MODULE = pystow.module('nsockg')
+
+metadata = Metadata(
+    title='Not Scared of Chemistry Knowledge Graph',
+    upload_type='dataset',
+    description='A combination of ExCAPE-DB, BioGRID, HomoloGene, and chemical similarities in a knowledge graph.',
+    creators=[
+        Creator(
+            name='Hoyt, Charles Tapley',
+            affiliation='Harvard Medical School',
+            orcid='0000-0003-4423-4370',
+        ),
+    ],
+)
+
+
+# EXCAPE - CC-BY-SA-4.0 License
+# BioGRID - MIT License
+# HomoloGene - ??
+
+@click.command()
+@more_click.verbose_option
+def main():
+    """Build NSoC-KG."""
+    biogrid_version = bioversions.get_version('biogrid')
+    homolgene_version = bioversions.get_version('homologene')
+
+    triples_path = NSOCKG_MODULE.get('triples.tsv')
+    with triples_path.open('w') as file:
+        _excape(file)
+        _biogrid(file, biogrid_version)
+        _homologene(file, homolgene_version)
+
+    metadata_path = NSOCKG_MODULE.get('metadata.json')
+    with metadata_path.open('w') as file:
+        json.dump(fp=file, indent=2, obj={
+            'date': datetime.datetime.now().strftime('%Y-%m-%d'),
+            'exporter': getpass.getuser(),
+            'versions': {
+                'biogrid': biogrid_version,
+                'homologene': homolgene_version,
+                'excape': EXCAPE_VERSION,
+            },
+        })
+
+    # Automatically upload this revision to Zenodo
+    ensure_zenodo(
+        key='nsockg',
+        data=metadata,
+        paths=[
+            triples_path,
+            metadata_path,
+        ],
+    )
 
 
 def _excape(file: TextIO, human_only: bool = False) -> None:
@@ -107,25 +168,6 @@ def _homologene(file: TextIO, version: str) -> None:
     })
     for homologene_id, ncbigene_id in tqdm(df.values, unit_scale=True, desc=f'HomoloGene v{version}'):
         print(ncbigene_id, 'homologyGroup', homologene_id, sep='\t', file=file)
-
-
-@click.command()
-@more_click.verbose_option
-def main():
-    """Build NSoC-KG."""
-    excape_cut_path = pystow.get('nsockg', 'excapedb', EXCAPE_VERSION, 'excape.tsv')
-    with open(excape_cut_path, 'w') as file:
-        _excape(file)
-
-    biogrid_version = bioversions.get_version('biogrid')
-    biogrid_cut_path = pystow.get('nsockg', 'biogrid', biogrid_version, 'biogrid_cut.tsv')
-    with open(biogrid_cut_path, 'w') as file:
-        _biogrid(file, biogrid_version)
-
-    homolgene_version = bioversions.get_version('homologene')
-    homolgene_cut_path = pystow.get('nsockg', 'homologene', homolgene_version, 'homologene.tsv')
-    with open(homolgene_cut_path, 'w') as file:
-        _homologene(file, homolgene_version)
 
 
 if __name__ == '__main__':
