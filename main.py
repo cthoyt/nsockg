@@ -50,11 +50,12 @@ def main():
     biogrid_version = bioversions.get_version('biogrid')
     homolgene_version = bioversions.get_version('homologene')
 
+    statistics = {}
     triples_path = NSOCKG_MODULE.get('triples.tsv')
     with triples_path.open('w') as file:
-        _excape(file)
-        _biogrid(file, biogrid_version)
-        _homologene(file, homolgene_version)
+        _excape(statistics, file)
+        _biogrid(statistics, file, biogrid_version)
+        _homologene(statistics, file, homolgene_version)
 
     metadata_path = NSOCKG_MODULE.get('metadata.json')
     with metadata_path.open('w') as file:
@@ -66,6 +67,7 @@ def main():
                 'homologene': homolgene_version,
                 'excape': EXCAPE_VERSION,
             },
+            'statistics': statistics,
         })
 
     # Automatically upload this revision to Zenodo
@@ -79,7 +81,7 @@ def main():
     )
 
 
-def _excape(file: TextIO, human_only: bool = False) -> None:
+def _excape(statistics, file: TextIO, human_only: bool = False) -> None:
     """Pre-process ExCAPE-DB.
 
     ExCAPE-DB is a database of chemical modulations of proteins built as a curated subset of
@@ -106,8 +108,10 @@ def _excape(file: TextIO, human_only: bool = False) -> None:
             else:
                 print(f'inchikey:{line[0]}', 'modulates', f'ncbigene:{line[2]}', sep='\t', file=file)
 
+        statistics['excape'] = i
 
-def _biogrid(file: TextIO, version: str, human_only: bool = False) -> None:
+
+def _biogrid(statistics, file: TextIO, version: str, human_only: bool = False) -> None:
     """Pre-process the given version of BioGRID.
 
     BioGRID is a manually curated database of protein-protein and protein-complex interactions.
@@ -131,9 +135,12 @@ def _biogrid(file: TextIO, version: str, human_only: bool = False) -> None:
             organism_a_key = header_dict['Organism Name Interactor A']
             organism_b_key = header_dict['Organism Name Interactor B']
 
+            count = 0
             for line in lines:
                 if human_only and (line[organism_a_key] != 'Homo sapiens' or line[organism_b_key] != 'Homo sapiens'):
                     continue
+
+                count += 1
                 print(
                     f'ncbigene:{line[source_key]}',
                     'interacts',
@@ -141,9 +148,10 @@ def _biogrid(file: TextIO, version: str, human_only: bool = False) -> None:
                     sep='\t',
                     file=file,
                 )
+            statistics['biogrid'] = count
 
 
-def _homologene(file: TextIO, version: str) -> None:
+def _homologene(statistics, file: TextIO, version: str) -> None:
     """Pre-process the orthology data from HomoloGene.
 
     :param file:
@@ -166,8 +174,11 @@ def _homologene(file: TextIO, version: str) -> None:
         'usecols': [0, 2],
         'sep': '\t',
     })
+    count = 0
     for homologene_id, ncbigene_id in tqdm(df.values, unit_scale=True, desc=f'HomoloGene v{version}'):
+        count += 1
         print(ncbigene_id, 'homologyGroup', homologene_id, sep='\t', file=file)
+    statistics['homologene'] = count
 
 
 if __name__ == '__main__':
