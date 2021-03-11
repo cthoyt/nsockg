@@ -177,7 +177,7 @@ def _homologene(statistics, file: TextIO, version: str) -> None:
     count = 0
     for homologene_id, ncbigene_id in tqdm(df.values, unit_scale=True, desc=f'HomoloGene v{version}'):
         count += 1
-        print(ncbigene_id, 'homologyGroup', homologene_id, sep='\t', file=file)
+        print(f'nbigene:{ncbigene_id}', 'homologyGroup', f'homologene:{homologene_id}', sep='\t', file=file)
     statistics['homologene'] = count
 
 
