@@ -10,7 +10,8 @@ import getpass
 import json
 import lzma
 import zipfile
-from typing import TextIO
+from pprint import pprint
+from typing import Iterable, Sequence, TextIO
 
 import bioversions
 import click
@@ -22,6 +23,8 @@ from zenodo_client import Creator, Metadata, ensure_zenodo
 # unlike BioGRID, ExCAPE-DB can be considered a static resource
 EXCAPE_URL = 'https://zenodo.org/record/2543724/files/pubchem.chembl.dataset4publication_inchi_smiles_v2.tsv.xz'
 EXCAPE_VERSION = 'v2'
+
+DISGENET_URL = 'https://www.disgenet.org/static/disgenet_ap1/files/downloads/curated_gene_disease_associations.tsv.gz'
 
 NSOCKG_MODULE = pystow.module('nsockg')
 
@@ -42,6 +45,7 @@ metadata = Metadata(
 # EXCAPE - CC-BY-SA-4.0 License
 # BioGRID - MIT License
 # HomoloGene - ??
+# DisGeNet - Attribution-NonCommercial-ShareAlike 4.0 International License
 
 @click.command()
 @more_click.verbose_option
@@ -49,6 +53,7 @@ def main():
     """Build NSoC-KG."""
     biogrid_version = bioversions.get_version('biogrid')
     homolgene_version = bioversions.get_version('homologene')
+    disgenet_version = bioversions.get_version('disgenet')
 
     statistics = {}
     triples_path = NSOCKG_MODULE.get('triples.tsv')
@@ -56,17 +61,26 @@ def main():
         _excape(statistics, file)
         _biogrid(statistics, file, biogrid_version)
         _homologene(statistics, file, homolgene_version)
+        _disgenet(statistics, file, disgenet_version)
+
+    # Count everything
+    statistics['total'] = sum(statistics.values())
+    pprint(statistics)
+
+    versions = {
+        'biogrid': biogrid_version,
+        'homologene': homolgene_version,
+        'excape': EXCAPE_VERSION,
+        'disgenet': disgenet_version,
+    }
+    pprint(versions)
 
     metadata_path = NSOCKG_MODULE.get('metadata.json')
     with metadata_path.open('w') as file:
         json.dump(fp=file, indent=2, obj={
             'date': datetime.datetime.now().strftime('%Y-%m-%d'),
             'exporter': getpass.getuser(),
-            'versions': {
-                'biogrid': biogrid_version,
-                'homologene': homolgene_version,
-                'excape': EXCAPE_VERSION,
-            },
+            'versions': versions,
             'statistics': statistics,
         })
 
@@ -79,6 +93,21 @@ def main():
             metadata_path,
         ],
     )
+
+
+def _disgenet(statistics, file: TextIO, version) -> None:
+    df = pystow.ensure_csv(
+        'bio2bel', 'disgenet', version,
+        url=DISGENET_URL,
+        read_csv_kwargs={'dtype': {'geneId': str}},
+    )
+    count = 0
+    for index, row in tqdm(df.iterrows(), total=len(df.index), unit_scale=True, desc='Exporting Disease-Gene'):
+        ncbigene_id = row['geneId'].strip()
+        disease_umls_id = row['diseaseId']
+        count += 1
+        print(f'ncbigene:{ncbigene_id}', 'associated', f'umls:{disease_umls_id}', sep='\t', file=file)
+    statistics['disgenet'] = count
 
 
 def _excape(statistics, file: TextIO, human_only: bool = False) -> None:
@@ -179,6 +208,12 @@ def _homologene(statistics, file: TextIO, version: str) -> None:
         count += 1
         print(f'nbigene:{ncbigene_id}', 'homologyGroup', f'homologene:{homologene_id}', sep='\t', file=file)
     statistics['homologene'] = count
+
+
+def cut(file: Iterable[str], sep: str, columns: Sequence[int]) -> Iterable[Sequence[str]]:
+    for line in file:
+        line = line.strip().split(sep)
+        yield tuple(line[column] for column in columns)
 
 
 if __name__ == '__main__':
