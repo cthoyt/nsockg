@@ -3,6 +3,7 @@
 A simple script to build a large knowledge graph with biomedical relationships. Rebuild any time with:
 
 ```shell
+python -m pip install -r requirements.txt
 python main.py
 ```
 
