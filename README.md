@@ -13,3 +13,7 @@ data acquisition, storage, processing, and output of biological data sources. It
 1. [`bioversions`](https://github.com/cthoyt/bioversions) for automated discovery of new versions of data
 2. [`pystow`](https://github.com/cthoyt/pystow) for automated downloading and caching of data
 3. [`zenodo-client`](https://github.com/zenodo-client) for automated uploading of the results to Zenodo, including automated versioning
+
+## Download
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4597866.svg)](https://doi.org/10.5281/zenodo.4597866)
