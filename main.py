@@ -8,15 +8,13 @@
 import datetime
 import getpass
 import json
-import lzma
-import zipfile
-from pprint import pprint
 from typing import Iterable, Sequence, TextIO
 
 import bioversions
 import click
 import more_click
 import pystow
+from tabulate import tabulate
 from tqdm import tqdm
 from zenodo_client import Creator, Metadata, ensure_zenodo
 
@@ -27,6 +25,7 @@ EXCAPE_VERSION = 'v2'
 DISGENET_URL = 'https://www.disgenet.org/static/disgenet_ap1/files/downloads/curated_gene_disease_associations.tsv.gz'
 
 NSOCKG_MODULE = pystow.module('nsockg')
+BIO = pystow.module('bio')
 
 metadata = Metadata(
     title='Not Scared of Chemistry Knowledge Graph',
@@ -54,28 +53,33 @@ def main():
     biogrid_version = bioversions.get_version('biogrid')
     homolgene_version = bioversions.get_version('homologene')
     disgenet_version = bioversions.get_version('disgenet')
+    excape_version = EXCAPE_VERSION
+    versions = {
+        'biogrid': biogrid_version,
+        'homologene': homolgene_version,
+        'excape': excape_version,
+        'disgenet': disgenet_version,
+    }
 
     statistics = {}
-    triples_path = NSOCKG_MODULE.get('triples.tsv')
+    triples_path = NSOCKG_MODULE.join(name='triples.tsv')
     with triples_path.open('w') as file:
-        _excape(statistics, file)
+        _excape(statistics, file, excape_version)
         _biogrid(statistics, file, biogrid_version)
         _homologene(statistics, file, homolgene_version)
         _disgenet(statistics, file, disgenet_version)
 
     # Count everything
     statistics['total'] = sum(statistics.values())
-    pprint(statistics)
 
-    versions = {
-        'biogrid': biogrid_version,
-        'homologene': homolgene_version,
-        'excape': EXCAPE_VERSION,
-        'disgenet': disgenet_version,
-    }
-    pprint(versions)
+    rows = [
+        (key, versions[key], statistics[key])
+        for key in sorted(versions)
+    ]
+    rows.append(("total", "", statistics["total"]))
+    print(tabulate(rows, headers=["Source", "Version", "Edges"]))
 
-    metadata_path = NSOCKG_MODULE.get('metadata.json')
+    metadata_path = NSOCKG_MODULE.join(name='metadata.json')
     with metadata_path.open('w') as file:
         json.dump(fp=file, indent=2, obj={
             'date': datetime.datetime.now().strftime('%Y-%m-%d'),
@@ -95,14 +99,14 @@ def main():
     )
 
 
-def _disgenet(statistics, file: TextIO, version) -> None:
-    df = pystow.ensure_csv(
-        'bio2bel', 'disgenet', version,
+def _disgenet(statistics, file: TextIO, version: str) -> None:
+    module = BIO.submodule('disgenet', version)
+    df = module.ensure_csv(
         url=DISGENET_URL,
         read_csv_kwargs={'dtype': {'geneId': str}},
     )
     count = 0
-    for index, row in tqdm(df.iterrows(), total=len(df.index), unit_scale=True, desc='Exporting Disease-Gene'):
+    for index, row in tqdm(df.iterrows(), total=len(df.index), unit_scale=True, desc=f'DisGeNet v{version}'):
         ncbigene_id = row['geneId'].strip()
         disease_umls_id = row['diseaseId']
         count += 1
@@ -110,7 +114,7 @@ def _disgenet(statistics, file: TextIO, version) -> None:
     statistics['disgenet'] = count
 
 
-def _excape(statistics, file: TextIO, human_only: bool = False) -> None:
+def _excape(statistics, file: TextIO, version: str, human_only: bool = False, url: str = EXCAPE_URL) -> None:
     """Pre-process ExCAPE-DB.
 
     ExCAPE-DB is a database of chemical modulations of proteins built as a curated subset of
@@ -119,10 +123,10 @@ def _excape(statistics, file: TextIO, human_only: bool = False) -> None:
     Future directions:
     - Add a variable pXC50 cutoff besides 6.0
     """
-    excape_path = pystow.ensure('bio2bel', 'excapedb', EXCAPE_VERSION, url=EXCAPE_URL)
-    with lzma.open(excape_path, mode='rt') as infile:
+    module = BIO.submodule('excapedb', version)
+    with module.ensure_open_lzma(url=url) as infile:
         _header = next(infile)
-        for i, line in enumerate(tqdm(infile, unit_scale=True, desc='ExCAPE-DB')):
+        for i, line in enumerate(tqdm(infile, unit_scale=True, desc=f'ExCAPE-DB {version}')):
             line = line.strip().split('\t')
             if human_only and line[7] != '9606':  # Taxonomy ID must be human
                 continue
@@ -147,37 +151,36 @@ def _biogrid(statistics, file: TextIO, version: str, human_only: bool = False) -
     """
     url = f'https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/' \
           f'BIOGRID-{version}/BIOGRID-ALL-{version}.tab3.zip'
-    path = pystow.ensure('bio2bel', 'biogrid', version, url=url)
+    inner_path = f'BIOGRID-ALL-{version}.tab3.txt'
+    module = BIO.submodule('biogrid', version)
+    with module.ensure_open_zip(url=url, inner_path=inner_path) as infile:
+        lines = (
+            line.decode('utf-8').strip().split('\t')
+            for line in tqdm(infile, unit_scale=True, desc=f'BioGRID v{version}')
+        )
 
-    with zipfile.ZipFile(path) as zip_file:
-        with zip_file.open(f'BIOGRID-ALL-{version}.tab3.txt') as infile:
-            lines = (
-                line.decode('utf-8').strip().split('\t')
-                for line in tqdm(infile, unit_scale=True, desc=f'BioGRID v{version}')
+        header = next(lines)
+        header_dict = {entry: i for i, entry in enumerate(header)}
+
+        source_key = header_dict['Entrez Gene Interactor A']
+        target_key = header_dict['Entrez Gene Interactor B']
+        organism_a_key = header_dict['Organism Name Interactor A']
+        organism_b_key = header_dict['Organism Name Interactor B']
+
+        count = 0
+        for line in lines:
+            if human_only and (line[organism_a_key] != 'Homo sapiens' or line[organism_b_key] != 'Homo sapiens'):
+                continue
+
+            count += 1
+            print(
+                f'ncbigene:{line[source_key]}',
+                'interacts',
+                f'ncbigene:{line[target_key]}',
+                sep='\t',
+                file=file,
             )
-
-            header = next(lines)
-            header_dict = {entry: i for i, entry in enumerate(header)}
-
-            source_key = header_dict['Entrez Gene Interactor A']
-            target_key = header_dict['Entrez Gene Interactor B']
-            organism_a_key = header_dict['Organism Name Interactor A']
-            organism_b_key = header_dict['Organism Name Interactor B']
-
-            count = 0
-            for line in lines:
-                if human_only and (line[organism_a_key] != 'Homo sapiens' or line[organism_b_key] != 'Homo sapiens'):
-                    continue
-
-                count += 1
-                print(
-                    f'ncbigene:{line[source_key]}',
-                    'interacts',
-                    f'ncbigene:{line[target_key]}',
-                    sep='\t',
-                    file=file,
-                )
-            statistics['biogrid'] = count
+        statistics['biogrid'] = count
 
 
 def _homologene(statistics, file: TextIO, version: str) -> None:
@@ -199,9 +202,9 @@ def _homologene(statistics, file: TextIO, version: str) -> None:
 
     """
     url = f'https://ftp.ncbi.nih.gov/pub/HomoloGene/build{version}/homologene.data'
-    df = pystow.ensure_csv('bio2bel', 'homologene', version, url=url, read_csv_kwargs={
+    module = BIO.submodule('homologene', version)
+    df = module.ensure_csv(url=url, read_csv_kwargs={
         'usecols': [0, 2],
-        'sep': '\t',
     })
     count = 0
     for homologene_id, ncbigene_id in tqdm(df.values, unit_scale=True, desc=f'HomoloGene v{version}'):
