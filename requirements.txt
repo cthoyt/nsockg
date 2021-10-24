@@ -1,6 +1,0 @@
-bioversions
-click
-more_click
-pystow
-tqdm
-zenodo_client
